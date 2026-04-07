@@ -1,0 +1,261 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  USER
+  SHOP
+  RESTAURANT
+  DELIVERY
+}
+
+enum ShopType {
+  RESTAURANT
+  SHOP
+  SERVICE_PROVIDER
+}
+
+enum ShopStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ServiceCategory {
+  LIGHT
+  GAS
+  PHONE
+  WATER
+  OTHER
+}
+
+enum DeliveryManStatus {
+  OFFLINE
+  ONLINE
+  ON_DELIVERY
+}
+
+enum OrderStatus {
+  PENDING         // New order, waiting for shop to accept
+  CONFIRMED       // Shop accepted
+  PREPARING       // Shop is preparing / working on it
+  READY_FOR_PICKUP // Shop marked ready; waiting for delivery person
+  ASSIGNED        // Delivery person assigned
+  ON_DELIVERY     // Courier heading to customer (in transit)
+  DELIVERED
+  CANCELLED
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  phone        String?   @unique
+  passwordHash String    @map("password_hash")
+  name         String?
+  lastName     String?   @map("last_name")
+  role         UserRole  @default(USER)
+  /// Dobby consumer gamification (Dobby Level / XP).
+  dobbyXp            Int       @default(0) @map("dobby_xp")
+  orderStreakDays    Int       @default(0) @map("order_streak_days")
+  lastOrderStreakDate DateTime? @map("last_order_streak_date") @db.Date
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  addresses    Address[]
+  deliveryMan DeliveryMan?
+  xpLedger     UserXpLedger[]
+}
+
+/// Audit + idempotent XP events for consumers (one row per logical award).
+model UserXpLedger {
+  id               String   @id @default(cuid())
+  userId           String   @map("user_id")
+  delta            Int
+  reason           String
+  orderId          String?  @map("order_id")
+  idempotencyKey   String   @unique @map("idempotency_key")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model Address {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  label       String   @default("Home")
+  description String?
+  address     String
+  lat         Float
+  lng         Float
+  isDefault   Boolean  @default(false) @map("is_default")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model OtpVerification {
+  id        String   @id @default(cuid())
+  phone     String   @unique
+  code      String
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+}
+
+model Shop {
+  id        String     @id @default(cuid())
+  name      String
+  type      ShopType   @default(SHOP)
+  address   String
+  phone     String?
+  logoUrl   String?    @map("logo_url")
+  rate      Float      @default(0) // 0 = worst, 5 = best
+  status    ShopStatus @default(ACTIVE)
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  products Product[]
+  orders   Order[]
+}
+
+model Service {
+  id          String          @id @default(cuid())
+  name        String
+  description String?
+  category    ServiceCategory @default(OTHER)
+  logoUrl     String?         @map("logo_url")
+  rate        Float           @default(0) // 0 = worst, 5 = best
+  isActive    Boolean         @default(true) @map("is_active")
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+
+  serviceRequests ServiceRequest[]
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  shopId      String   @map("shop_id")
+  name        String
+  description String?
+  price       Decimal  @db.Decimal(10, 2)
+  imageUrls   String[] @default([]) @map("image_urls")
+  hasPromotion Boolean @default(false) @map("has_promotion")
+  discount    Int      @default(0)
+  rate        Float    @default(0) // 0 = worst, 5 = best
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  shop        Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  orderItems  OrderItem[]
+}
+
+model DeliveryMan {
+  id                String            @id @default(cuid())
+  userId            String            @unique @map("user_id")
+  name              String            @default("")
+  profilePhotoUrl   String?           @map("profile_photo_url")
+  address           String?
+  celphone          String?
+  idImageFrontUrl   String?           @map("id_image_front_url")
+  idImageBackUrl    String?           @map("id_image_back_url")
+  referenceName     String?           @map("reference_name")
+  referencePhone    String?           @map("reference_phone")
+  referenceAddress  String?           @map("reference_address")
+  /// Conectividad del repartidor: OFFLINE (desconectado), ONLINE (disponible), ON_DELIVERY (en reparto).
+  status            DeliveryManStatus @default(OFFLINE)
+  lastSeenAt        DateTime?         @map("last_seen_at")
+  lastLat           Float?            @map("last_lat")
+  lastLng           Float?            @map("last_lng")
+  xp                Int               @default(0)
+  rating            Float             @default(0)
+  ratingCount       Int               @default(0) @map("rating_count")
+  totalDeliveries   Int               @default(0) @map("total_deliveries")
+  currentStreakDays Int               @default(0) @map("current_streak_days")
+  /// Last UTC calendar day that counted toward streak (date-only semantics)
+  lastStreakDate    DateTime?         @map("last_streak_date") @db.Date
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders Order[]
+}
+
+model Order {
+  id              String      @id @default(cuid())
+  userId          String      @map("user_id")
+  shopId          String?     @map("shop_id")
+  deliveryManId   String?     @map("delivery_man_id")
+  status          OrderStatus @default(PENDING)
+  /// Minutes the shop estimates for preparation (set when moving CONFIRMED → PREPARING)
+  estimatedPreparationMinutes Int? @map("estimated_preparation_minutes")
+  /// Minutes until arrival at customer; updated by courier app while ON_DELIVERY (Directions ETA).
+  estimatedDeliveryMinutes Int? @map("estimated_delivery_minutes")
+  total           Decimal     @db.Decimal(10, 2)
+  deliveryAddress String?     @map("delivery_address")
+  lat             Float?      @map("lat")
+  lng             Float?      @map("lng")
+  onDeliveryStartedAt DateTime? @map("on_delivery_started_at")
+  /// Repartidor confirmó llegada al domicilio (antes de marcar entregado).
+  arrivedAtCustomerAt DateTime? @map("arrived_at_customer_at")
+  deliveredAt     DateTime?   @map("delivered_at")
+  deliveryRating  Int?        @map("delivery_rating")
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+
+  shop        Shop?         @relation(fields: [shopId], references: [id])
+  deliveryMan DeliveryMan?  @relation(fields: [deliveryManId], references: [id])
+  items       OrderItem[]
+  serviceRequests ServiceRequest[]
+
+  @@index([deliveryManId, deliveredAt])
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String  @map("order_id")
+  productId String  @map("product_id")
+  quantity  Int
+  price     Decimal @db.Decimal(10, 2)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+}
+
+model ServiceRequest {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  serviceId String   @map("service_id")
+  orderId   String?  @map("order_id")
+  status    OrderStatus @default(PENDING)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  service Service @relation(fields: [serviceId], references: [id])
+  order   Order?  @relation(fields: [orderId], references: [id])
+}
+
+model Ad {
+  id             String   @id @default(cuid())
+  imageUrl       String?  @map("image_url")
+  advertiserName String   @map("advertiser_name")
+  description    String?
+  address        String?
+  contactPhone   String?  @map("contact_phone")
+  whatsapp       String?
+  facebookUrl    String?  @map("facebook_url")
+  instagramUrl   String?  @map("instagram_url")
+  email          String?
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+}

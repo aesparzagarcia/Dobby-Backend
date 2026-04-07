@@ -1,0 +1,37 @@
+{
+  "name": "ewe-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:studio": "prisma studio",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:migrate:baseline": "prisma migrate resolve --applied 20260328120000_add_estimated_preparation_minutes && prisma migrate resolve --applied 20260329180000_order_status_in_progress_to_on_delivery && prisma migrate resolve --applied 20260331100000_ensure_order_status_on_delivery_enum"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.0.0",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/multer": "^1.4.11",
+    "@types/node": "^22.0.0",
+    "dotenv": "^16.4.5",
+    "prisma": "^6.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.0.0"
+  }
+}
