@@ -23,7 +23,7 @@ ordersAdminRouter.get("/:orderId/tracking", async (req, res) => {
         lat: true,
         lng: true,
         shop: {
-          select: { id: true, name: true, address: true },
+          select: { id: true, name: true, address: true, lat: true, lng: true },
         },
         deliveryMan: {
           select: {
@@ -49,9 +49,9 @@ ordersAdminRouter.get("/:orderId/tracking", async (req, res) => {
       select: { id: true, email: true, name: true, lastName: true },
     });
 
-    let shopLat: number | null = null;
-    let shopLng: number | null = null;
-    if (order.shop?.address && order.shop.id) {
+    let shopLat = order.shop?.lat != null ? Number(order.shop.lat) : null;
+    let shopLng = order.shop?.lng != null ? Number(order.shop.lng) : null;
+    if (shopLat == null && shopLng == null && order.shop?.address && order.shop.id) {
       const coords = await geocodeAddressNominatim(order.shop.address, `shop:${order.shop.id}`);
       if (coords) {
         shopLat = coords.lat;

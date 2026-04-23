@@ -1,4 +1,5 @@
 import { prisma } from "../lib/db.js";
+import { geocodeAddressNominatim } from "../lib/geocodeNominatim.js";
 import { requireDelivery } from "../middleware/auth.js";
 import { Router } from "express";
 import {
@@ -8,6 +9,7 @@ import {
   xpForDelivery,
 } from "../services/deliveryGamification.js";
 import { applyConsumerOrderDelivered } from "../services/consumerGamification.js";
+import { notifyConsumerOrderStatusIfConfigured } from "../services/pushNotifications.js";
 
 export const deliveryOrdersRouter = Router();
 
@@ -172,7 +174,7 @@ deliveryOrdersRouter.get("/orders", async (req, res) => {
       where,
       orderBy: { createdAt: "desc" },
       include: {
-        shop: { select: { id: true, name: true } },
+        shop: { select: { id: true, name: true, lat: true, lng: true } },
         items: {
           include: {
             product: { select: { id: true, name: true } },
@@ -200,6 +202,8 @@ deliveryOrdersRouter.get("/orders", async (req, res) => {
         arrivedAtCustomerAt: o.arrivedAtCustomerAt ? o.arrivedAtCustomerAt.toISOString() : null,
         createdAt: o.createdAt,
         shopName: o.shop?.name ?? null,
+        shopLat: o.shop?.lat != null ? Number(o.shop.lat) : null,
+        shopLng: o.shop?.lng != null ? Number(o.shop.lng) : null,
         customerName: user?.name ?? user?.email ?? null,
         items: o.items.map((i) => ({
           productId: i.productId,
@@ -235,7 +239,7 @@ deliveryOrdersRouter.get("/orders/:id", async (req, res) => {
         ],
       },
       include: {
-        shop: { select: { id: true, name: true } },
+        shop: { select: { id: true, name: true, address: true, lat: true, lng: true } },
         items: {
           include: {
             product: { select: { id: true, name: true } },
@@ -250,6 +254,17 @@ deliveryOrdersRouter.get("/orders/:id", async (req, res) => {
       where: { id: order.userId },
       select: { id: true, name: true, email: true },
     });
+
+    let shopLat = order.shop?.lat != null ? Number(order.shop.lat) : null;
+    let shopLng = order.shop?.lng != null ? Number(order.shop.lng) : null;
+    if (shopLat == null && shopLng == null && order.shop?.address && order.shop.id) {
+      const coords = await geocodeAddressNominatim(order.shop.address, `shop:${order.shop.id}`);
+      if (coords) {
+        shopLat = coords.lat;
+        shopLng = coords.lng;
+      }
+    }
+
     res.json({
       id: order.id,
       status: order.status,
@@ -262,6 +277,9 @@ deliveryOrdersRouter.get("/orders/:id", async (req, res) => {
       lng: order.lng != null ? Number(order.lng) : null,
       createdAt: order.createdAt,
       shopName: order.shop?.name ?? null,
+      shopAddress: order.shop?.address ?? null,
+      shopLat,
+      shopLng,
       customerName: user?.name ?? user?.email ?? null,
       items: order.items.map((i) => ({
         productId: i.productId,
@@ -289,6 +307,7 @@ deliveryOrdersRouter.patch("/orders/:id/assign", async (req, res) => {
     if (!order) {
       return res.status(404).json({ error: "Pedido no encontrado o ya asignado" });
     }
+    const consumerId = order.userId;
     await prisma.$transaction([
       prisma.order.update({
         where: { id: orderId },
@@ -299,6 +318,9 @@ deliveryOrdersRouter.patch("/orders/:id/assign", async (req, res) => {
         data: { status: "ONLINE", lastSeenAt: new Date() },
       }),
     ]);
+    void notifyConsumerOrderStatusIfConfigured(consumerId, orderId, "ASSIGNED").catch((e) =>
+      console.error("[push] ASSIGNED", e)
+    );
     res.json({ ok: true, status: "ASSIGNED" });
   } catch (e) {
     console.error("[PATCH /api/delivery/orders/:id/assign]", e);
@@ -319,6 +341,7 @@ deliveryOrdersRouter.patch("/orders/:id/start", async (req, res) => {
     if (!order) {
       return res.status(404).json({ error: "Pedido no encontrado o no asignado a ti" });
     }
+    const consumerId = order.userId;
     await prisma.$transaction([
       prisma.order.update({
         where: { id: orderId },
@@ -333,6 +356,9 @@ deliveryOrdersRouter.patch("/orders/:id/start", async (req, res) => {
         data: { status: "ON_DELIVERY", lastSeenAt: new Date() },
       }),
     ]);
+    void notifyConsumerOrderStatusIfConfigured(consumerId, orderId, "ON_DELIVERY").catch((e) =>
+      console.error("[push] ON_DELIVERY", e)
+    );
     res.json({ ok: true, status: "ON_DELIVERY" });
   } catch (e) {
     console.error("[PATCH /api/delivery/orders/:id/start]", e);
@@ -395,6 +421,7 @@ deliveryOrdersRouter.patch("/orders/:id/delivered", async (req, res) => {
     }
     const now = new Date();
     const xpGain = xpForDelivery(order.onDeliveryStartedAt, now);
+    const consumerId = order.userId;
     await prisma.$transaction(async (tx) => {
       await tx.order.update({
         where: { id: orderId },
@@ -432,6 +459,9 @@ deliveryOrdersRouter.patch("/orders/:id/delivered", async (req, res) => {
         },
       });
     });
+    void notifyConsumerOrderStatusIfConfigured(consumerId, orderId, "DELIVERED").catch((e) =>
+      console.error("[push] DELIVERED", e)
+    );
     res.json({ ok: true, status: "DELIVERED", xp_gained: xpGain });
   } catch (e) {
     console.error("[PATCH /api/delivery/orders/:id/delivered]", e);

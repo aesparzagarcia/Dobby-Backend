@@ -23,6 +23,51 @@ appRouter.get("/me/gamification", requireUser, async (req, res) => {
   }
 });
 
+/** Register FCM token for push (Dobby consumer). Body: { fcm_token, platform: "android"|"ios" } */
+appRouter.post("/push-device", requireUser, async (req, res) => {
+  try {
+    const user = (req as unknown as { user: { sub: string; role: string } }).user;
+    if (user.role !== "USER") {
+      return res.status(403).json({ error: "Only for consumer accounts" });
+    }
+    const rawToken = req.body?.fcm_token;
+    const rawPlatform = req.body?.platform;
+    const fcmToken = typeof rawToken === "string" ? rawToken.trim() : "";
+    const platform =
+      typeof rawPlatform === "string" ? rawPlatform.trim().toLowerCase() : "";
+    if (!fcmToken || fcmToken.length < 10) {
+      return res.status(400).json({ error: "fcm_token inválido" });
+    }
+    if (platform !== "android" && platform !== "ios") {
+      return res.status(400).json({ error: "platform debe ser android o ios" });
+    }
+    await prisma.userPushDevice.upsert({
+      where: { token: fcmToken },
+      create: { userId: user.sub, token: fcmToken, platform },
+      update: { userId: user.sub, platform },
+    });
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[POST /api/app/push-device]", e);
+    return res.status(500).json({ error: "No se pudo registrar el dispositivo" });
+  }
+});
+
+/** Remove all push tokens for this user (e.g. logout). */
+appRouter.delete("/push-device", requireUser, async (req, res) => {
+  try {
+    const user = (req as unknown as { user: { sub: string; role: string } }).user;
+    if (user.role !== "USER") {
+      return res.status(403).json({ error: "Only for consumer accounts" });
+    }
+    await prisma.userPushDevice.deleteMany({ where: { userId: user.sub } });
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[DELETE /api/app/push-device]", e);
+    return res.status(500).json({ error: "No se pudo limpiar dispositivos" });
+  }
+});
+
 appRouter.get("/places", async (_req, res) => {
   try {
     const [shops, services] = await Promise.all([

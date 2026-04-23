@@ -20,15 +20,19 @@ shopsRouter.get("/", async (req, res) => {
 });
 
 shopsRouter.post("/", async (req, res) => {
-  const { name, type, address, phone, logoUrl, status } = req.body || {};
+  const { name, type, address, lat, lng, phone, logoUrl, status } = req.body || {};
   if (!name || !type || !address) {
     return res.status(400).json({ error: "Se requieren nombre, tipo y dirección" });
   }
+  const latNum = lat != null ? Number(lat) : null;
+  const lngNum = lng != null ? Number(lng) : null;
   const shop = await prisma.shop.create({
     data: {
       name,
       type: type as "RESTAURANT" | "SHOP" | "SERVICE_PROVIDER",
       address,
+      lat: latNum != null && Number.isFinite(latNum) ? latNum : null,
+      lng: lngNum != null && Number.isFinite(lngNum) ? lngNum : null,
       phone: phone || null,
       logoUrl: logoUrl || null,
       status: (status as "ACTIVE" | "INACTIVE") || "ACTIVE",
@@ -47,12 +51,22 @@ shopsRouter.put("/:id", async (req, res) => {
   const shop = await prisma.shop.findUnique({ where: { id: req.params.id } });
   if (!shop) return res.status(404).json({ error: "No encontrado" });
   const body = req.body || {};
+  const latRaw = body.lat;
+  const lngRaw = body.lng;
+  const latNum = latRaw !== undefined ? Number(latRaw) : undefined;
+  const lngNum = lngRaw !== undefined ? Number(lngRaw) : undefined;
   const updated = await prisma.shop.update({
     where: { id: req.params.id },
     data: {
       ...(body.name != null && { name: body.name }),
       ...(body.type != null && { type: body.type }),
       ...(body.address != null && { address: body.address }),
+      ...(latRaw !== undefined && {
+        lat: latNum != null && Number.isFinite(latNum) ? latNum : null,
+      }),
+      ...(lngRaw !== undefined && {
+        lng: lngNum != null && Number.isFinite(lngNum) ? lngNum : null,
+      }),
       ...(body.phone != null && { phone: body.phone }),
       ...(body.logoUrl !== undefined && { logoUrl: body.logoUrl || null }),
       ...(body.status != null && { status: body.status }),

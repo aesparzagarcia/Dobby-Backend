@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "../lib/db.js";
 import { requireUser } from "../middleware/auth.js";
 import { applyConsumerDeliveryRatingXp } from "../services/consumerGamification.js";
+import { notifyConsumerOrderStatusIfConfigured } from "../services/pushNotifications.js";
 
 export const ordersRouter = Router();
 
@@ -96,6 +97,56 @@ ordersRouter.post("/:id/rate-delivery", async (req, res) => {
   }
 });
 
+/** POST body: { stars: number } — 1–5, valoración del restaurante/tienda, una sola vez por pedido entregado. */
+ordersRouter.post("/:id/rate-shop", async (req, res) => {
+  try {
+    const userId = (req as any).user.sub;
+    const orderId = req.params.id;
+    const stars = req.body?.stars != null ? Number(req.body.stars) : NaN;
+    if (!Number.isInteger(stars) || stars < 1 || stars > 5) {
+      return res.status(400).json({ error: "stars debe ser un entero entre 1 y 5" });
+    }
+    const rateResult = await prisma.$transaction(async (tx) => {
+      const order = await tx.order.findFirst({
+        where: { id: orderId, userId },
+      });
+      if (!order) return "not_found" as const;
+      if (order.status !== "DELIVERED") return "not_delivered" as const;
+      if (!order.shopId) return "no_shop" as const;
+      if (order.shopRating != null) return "already_rated" as const;
+      await tx.order.update({
+        where: { id: orderId },
+        data: { shopRating: stars },
+      });
+      const shop = await tx.shop.findUniqueOrThrow({
+        where: { id: order.shopId },
+      });
+      const newCount = shop.ratingCount + 1;
+      const newRating =
+        shop.ratingCount === 0 ? stars : (shop.rate * shop.ratingCount + stars) / newCount;
+      await tx.shop.update({
+        where: { id: order.shopId },
+        data: { rate: newRating, ratingCount: newCount },
+      });
+      return "ok" as const;
+    });
+    if (rateResult === "not_found") return res.status(404).json({ error: "Pedido no encontrado" });
+    if (rateResult === "not_delivered") {
+      return res.status(400).json({ error: "Solo puedes valorar pedidos entregados" });
+    }
+    if (rateResult === "no_shop") {
+      return res.status(400).json({ error: "Este pedido no tiene tienda asociada" });
+    }
+    if (rateResult === "already_rated") {
+      return res.status(400).json({ error: "Ya valoraste este restaurante en este pedido" });
+    }
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[POST /api/orders/:id/rate-shop] Error:", e);
+    return res.status(500).json({ error: "No se pudo guardar la valoración" });
+  }
+});
+
 // Get order tracking details for the customer (order, delivery address coords, shop, items, delivery man)
 ordersRouter.get("/:id/tracking", async (req, res) => {
   try {
@@ -111,6 +162,8 @@ ordersRouter.get("/:id/tracking", async (req, res) => {
         estimatedPreparationMinutes: true,
         estimatedDeliveryMinutes: true,
         deliveryRating: true,
+        shopId: true,
+        shopRating: true,
         lat: true,
         lng: true,
         arrivedAtCustomerAt: true,
@@ -135,6 +188,8 @@ ordersRouter.get("/:id/tracking", async (req, res) => {
       order.status === "DELIVERED" &&
       order.deliveryMan != null &&
       order.deliveryRating == null;
+    const canRateShop =
+      order.status === "DELIVERED" && order.shopId != null && order.shopRating == null;
 
     return res.json({
       id: order.id,
@@ -145,7 +200,9 @@ ordersRouter.get("/:id/tracking", async (req, res) => {
       estimated_delivery_minutes: order.estimatedDeliveryMinutes ?? null,
       arrived_at_customer_at: order.arrivedAtCustomerAt ? order.arrivedAtCustomerAt.toISOString() : null,
       delivery_rating: order.deliveryRating ?? null,
+      shop_rating: order.shopRating ?? null,
       can_rate_delivery: canRateDelivery,
+      can_rate_shop: canRateShop,
       lat: order.lat != null ? Number(order.lat) : null,
       lng: order.lng != null ? Number(order.lng) : null,
       created_at: order.createdAt,
@@ -240,6 +297,10 @@ ordersRouter.post("/", async (req, res) => {
 
       return created;
     });
+
+    void notifyConsumerOrderStatusIfConfigured(userId, order.id, "PENDING").catch((e) =>
+      console.error("[push] PENDING", e)
+    );
 
     return res.status(201).json({
       id: order.id,

@@ -2,10 +2,35 @@ import { Router } from "express";
 import type { Prisma, OrderStatus } from "@prisma/client";
 import { prisma } from "../lib/db.js";
 import { requireShop } from "../middleware/auth.js";
+import { computeRestaurantProfile } from "../services/restaurantScore.js";
+import { notifyConsumerOrderStatusIfConfigured } from "../services/pushNotifications.js";
 
 export const shopOrdersRouter = Router();
 
 shopOrdersRouter.use(requireShop);
+
+/** GET /api/shop/profile - Restaurant Score, nivel y desglose (JWT tienda). */
+shopOrdersRouter.get("/profile", async (req, res) => {
+  try {
+    const shopId = (req as typeof req & { shopId: string }).shopId;
+    const profile = await computeRestaurantProfile(prisma, shopId);
+    res.json({
+      name: profile.name,
+      logo_url: profile.logo_url,
+      restaurant_score: profile.restaurant_score,
+      level_key: profile.level_key,
+      progress_to_next_level: profile.progress_to_next_level,
+      next_level_min_score: profile.next_level_min_score,
+      score_blend_weights: profile.score_blend_weights,
+      breakdown: profile.breakdown,
+      insights: profile.insights,
+      missions: profile.missions,
+    });
+  } catch (e) {
+    console.error("[GET /api/shop/profile]", e);
+    res.status(500).json({ error: "Error al cargar el perfil" });
+  }
+});
 
 /** GET /api/shop/orders - List orders for the logged-in shop (Ewe-Shop app) */
 shopOrdersRouter.get("/orders", async (req, res) => {
@@ -73,8 +98,11 @@ shopOrdersRouter.patch("/orders/:id/accept", async (req, res) => {
     }
     await prisma.order.update({
       where: { id: orderId },
-      data: { status: "CONFIRMED" },
+      data: { status: "CONFIRMED", confirmedAt: order.confirmedAt ?? new Date() },
     });
+    void notifyConsumerOrderStatusIfConfigured(order.userId, orderId, "CONFIRMED").catch((e) =>
+      console.error("[push] CONFIRMED", e)
+    );
     res.json({ ok: true, status: "CONFIRMED" });
   } catch (e) {
     console.error("[PATCH /api/shop/orders/:id/accept]", e);
@@ -102,10 +130,18 @@ shopOrdersRouter.patch("/orders/:id/preparing", async (req, res) => {
     if (order.status !== "CONFIRMED") {
       return res.status(400).json({ error: "Solo se puede marcar en preparación un pedido confirmado" });
     }
+    const now = new Date();
     await prisma.order.update({
       where: { id: orderId },
-      data: { status: "PREPARING", estimatedPreparationMinutes: rounded },
+      data: {
+        status: "PREPARING",
+        estimatedPreparationMinutes: rounded,
+        preparingAt: order.preparingAt ?? now,
+      },
     });
+    void notifyConsumerOrderStatusIfConfigured(order.userId, orderId, "PREPARING").catch((e) =>
+      console.error("[push] PREPARING", e)
+    );
     res.json({ ok: true, status: "PREPARING", estimatedPreparationMinutes: rounded });
   } catch (e) {
     console.error("[PATCH /api/shop/orders/:id/preparing]", e);
@@ -123,10 +159,14 @@ shopOrdersRouter.patch("/orders/:id/ready-for-pickup", async (req, res) => {
     if (order.status !== "PREPARING") {
       return res.status(400).json({ error: "Solo se puede marcar listo para recoger un pedido en preparación" });
     }
+    const now = new Date();
     await prisma.order.update({
       where: { id: orderId },
-      data: { status: "READY_FOR_PICKUP" },
+      data: { status: "READY_FOR_PICKUP", readyForPickupAt: order.readyForPickupAt ?? now },
     });
+    void notifyConsumerOrderStatusIfConfigured(order.userId, orderId, "READY_FOR_PICKUP").catch((e) =>
+      console.error("[push] READY_FOR_PICKUP", e)
+    );
     res.json({ ok: true, status: "READY_FOR_PICKUP" });
   } catch (e) {
     console.error("[PATCH /api/shop/orders/:id/ready-for-pickup]", e);
@@ -144,13 +184,53 @@ shopOrdersRouter.patch("/orders/:id/reject", async (req, res) => {
     if (order.status !== "PENDING") {
       return res.status(400).json({ error: "Solo se pueden rechazar pedidos pendientes" });
     }
+    const now = new Date();
     await prisma.order.update({
       where: { id: orderId },
-      data: { status: "CANCELLED" },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: now,
+        cancelSource: "SHOP_REJECT_PENDING",
+      },
     });
+    void notifyConsumerOrderStatusIfConfigured(order.userId, orderId, "CANCELLED").catch((e) =>
+      console.error("[push] CANCELLED reject", e)
+    );
     res.json({ ok: true, status: "CANCELLED" });
   } catch (e) {
     console.error("[PATCH /api/shop/orders/:id/reject]", e);
     res.status(500).json({ error: "Error al rechazar el pedido" });
+  }
+});
+
+/** PATCH /api/shop/orders/:id/cancel-after-accept - Shop cancels after accepting (CONFIRMED / PREPARING / READY_FOR_PICKUP → CANCELLED). Not allowed once assigned to courier. */
+shopOrdersRouter.patch("/orders/:id/cancel-after-accept", async (req, res) => {
+  try {
+    const shopId = (req as typeof req & { shopId: string }).shopId;
+    const orderId = req.params.id;
+    const order = await prisma.order.findFirst({ where: { id: orderId, shopId } });
+    if (!order) return res.status(404).json({ error: "Pedido no encontrado" });
+    const allowed: OrderStatus[] = ["CONFIRMED", "PREPARING", "READY_FOR_PICKUP"];
+    if (!allowed.includes(order.status)) {
+      return res.status(400).json({
+        error: "Solo puedes cancelar pedidos confirmados, en preparación o listos (antes de asignar repartidor)",
+      });
+    }
+    const now = new Date();
+    await prisma.order.update({
+      where: { id: orderId },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: now,
+        cancelSource: "SHOP_CANCEL_AFTER_CONFIRM",
+      },
+    });
+    void notifyConsumerOrderStatusIfConfigured(order.userId, orderId, "CANCELLED").catch((e) =>
+      console.error("[push] CANCELLED cancel-after-accept", e)
+    );
+    res.json({ ok: true, status: "CANCELLED" });
+  } catch (e) {
+    console.error("[PATCH /api/shop/orders/:id/cancel-after-accept]", e);
+    res.status(500).json({ error: "Error al cancelar el pedido" });
   }
 });
