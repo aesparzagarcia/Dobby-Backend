@@ -8,11 +8,11 @@ export const ordersRouter = Router();
 
 ordersRouter.use(requireUser);
 
-// Get the user's active order (most recent non-delivered, non-cancelled)
+// All active orders (non-delivered, non-cancelled), newest first.
 ordersRouter.get("/active", async (req, res) => {
   try {
     const userId = (req as any).user.sub;
-    const order = await prisma.order.findFirst({
+    const orders = await prisma.order.findMany({
       where: {
         userId,
         status: { notIn: ["DELIVERED", "CANCELLED"] },
@@ -26,23 +26,32 @@ ordersRouter.get("/active", async (req, res) => {
         createdAt: true,
         estimatedPreparationMinutes: true,
         estimatedDeliveryMinutes: true,
+        items: {
+          select: {
+            quantity: true,
+            product: { select: { name: true } },
+          },
+        },
       },
     });
-    if (!order) {
-      return res.status(204).send();
-    }
-    return res.json({
-      id: order.id,
-      status: order.status,
-      total: Number(order.total),
-      delivery_address: order.deliveryAddress,
-      created_at: order.createdAt,
-      estimated_preparation_minutes: order.estimatedPreparationMinutes ?? null,
-      estimated_delivery_minutes: order.estimatedDeliveryMinutes ?? null,
-    });
+    return res.json(
+      orders.map((order) => ({
+        id: order.id,
+        status: order.status,
+        total: Number(order.total),
+        delivery_address: order.deliveryAddress,
+        created_at: order.createdAt,
+        estimated_preparation_minutes: order.estimatedPreparationMinutes ?? null,
+        estimated_delivery_minutes: order.estimatedDeliveryMinutes ?? null,
+        items: order.items.map((item) => ({
+          product_name: item.product.name,
+          quantity: item.quantity,
+        })),
+      }))
+    );
   } catch (e) {
     console.error("[GET /api/orders/active] Error:", e);
-    return res.status(500).json({ error: "Failed to get active order" });
+    return res.status(500).json({ error: "Failed to get active orders" });
   }
 });
 

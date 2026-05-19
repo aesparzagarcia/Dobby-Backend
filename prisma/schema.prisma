@@ -51,6 +51,21 @@ enum OrderStatus {
   CANCELLED
 }
 
+/// Quién o qué motivó la cancelación (para Restaurant Score).
+enum OrderCancelSource {
+  UNKNOWN
+  SHOP_REJECT_PENDING
+  SHOP_CANCEL_AFTER_CONFIRM
+  USER
+  SYSTEM
+}
+
+enum AppConfigType {
+  DOUBLE
+  BOOLEAN
+  STRING
+}
+
 model User {
   id           String    @id @default(cuid())
   email        String    @unique
@@ -69,6 +84,22 @@ model User {
   addresses    Address[]
   deliveryMan DeliveryMan?
   xpLedger     UserXpLedger[]
+  pushDevices  UserPushDevice[]
+}
+
+/// FCM registration tokens for consumer push (Dobby app). One row per device token.
+model UserPushDevice {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  /// Firebase Cloud Messaging token (Android + iOS when using Firebase SDK).
+  token     String   @unique
+  platform  String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 /// Audit + idempotent XP events for consumers (one row per logical award).
@@ -115,9 +146,13 @@ model Shop {
   name      String
   type      ShopType   @default(SHOP)
   address   String
+  /// Pickup coordinates for maps / routing (WGS84). Optional until backfilled or set in admin.
+  lat       Float?     @map("lat")
+  lng       Float?     @map("lng")
   phone     String?
   logoUrl   String?    @map("logo_url")
   rate      Float      @default(0) // 0 = worst, 5 = best
+  ratingCount Int @default(0) @map("rating_count")
   status    ShopStatus @default(ACTIVE)
   createdAt DateTime   @default(now()) @map("created_at")
   updatedAt DateTime   @updatedAt @map("updated_at")
@@ -208,6 +243,13 @@ model Order {
   arrivedAtCustomerAt DateTime? @map("arrived_at_customer_at")
   deliveredAt     DateTime?   @map("delivered_at")
   deliveryRating  Int?        @map("delivery_rating")
+  /// Valoración del restaurante/tienda por el cliente (1–5), una vez por pedido entregado.
+  shopRating      Int?        @map("shop_rating")
+  confirmedAt     DateTime?   @map("confirmed_at")
+  preparingAt     DateTime?   @map("preparing_at")
+  readyForPickupAt DateTime?  @map("ready_for_pickup_at")
+  cancelledAt     DateTime?   @map("cancelled_at")
+  cancelSource    OrderCancelSource? @map("cancel_source")
   createdAt       DateTime    @default(now()) @map("created_at")
   updatedAt       DateTime    @updatedAt @map("updated_at")
 
@@ -217,6 +259,7 @@ model Order {
   serviceRequests ServiceRequest[]
 
   @@index([deliveryManId, deliveredAt])
+  @@index([shopId, createdAt])
 }
 
 model OrderItem {
@@ -242,6 +285,16 @@ model ServiceRequest {
 
   service Service @relation(fields: [serviceId], references: [id])
   order   Order?  @relation(fields: [orderId], references: [id])
+}
+
+/// Configuración global de la app (tarifas de envío, flags, etc.) editable desde el panel web.
+model AppConfig {
+  id    Int           @id @default(autoincrement())
+  key   String        @unique
+  value String
+  type  AppConfigType
+
+  @@map("app_config")
 }
 
 model Ad {

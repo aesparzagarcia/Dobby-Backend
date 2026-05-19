@@ -14,6 +14,10 @@ export type JWTPayload = {
 };
 
 const MOBILE_APP_ACCESS_EXPIRES = "15m" as const;
+/** Ewe consumer (Dobby) app: longer access like Shop to reduce 401 / refresh churn on stable sessions. */
+const CONSUMER_APP_ACCESS_EXPIRES = "2h" as const;
+/** Ewe-Shop: access más largo para menos 401 y menos rotaciones de refresh en sesiones estables. */
+const SHOP_APP_ACCESS_EXPIRES = "2h" as const;
 const MOBILE_APP_REFRESH_EXPIRES = "30d" as const;
 
 export async function hashPassword(password: string): Promise<string> {
@@ -40,7 +44,7 @@ export function signShopAccessToken(payload: { sub: string; email: string }): st
   return jwt.sign(
     { sub: payload.sub, email: payload.email, role: "SHOP" },
     JWT_SECRET,
-    { expiresIn: MOBILE_APP_ACCESS_EXPIRES }
+    { expiresIn: SHOP_APP_ACCESS_EXPIRES }
   );
 }
 
@@ -99,12 +103,12 @@ export function verifyDeliveryRefreshToken(token: string): JWTPayload | null {
   return p;
 }
 
-/** Short-lived access for Ewe consumer app (Bearer on /orders, /addresses, /app/*, etc.). */
+/** Access token for Ewe consumer app (Bearer on /orders, /addresses, /app/*, etc.). */
 export function signUserAccessToken(payload: { sub: string; email: string; role: string }): string {
   return jwt.sign(
     { sub: payload.sub, email: payload.email, role: payload.role },
     JWT_SECRET,
-    { expiresIn: MOBILE_APP_ACCESS_EXPIRES }
+    { expiresIn: CONSUMER_APP_ACCESS_EXPIRES }
   );
 }
 

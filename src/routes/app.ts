@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "../lib/db.js";
 import { requireUser } from "../middleware/auth.js";
 import { getConsumerGamificationSnapshot } from "../services/consumerGamification.js";
+import { loadDeliveryPricingConfig } from "../services/deliveryPricingConfig.js";
 
 /**
  * Public API for the mobile app (no admin auth required).
@@ -68,13 +69,24 @@ appRouter.delete("/push-device", requireUser, async (req, res) => {
   }
 });
 
+/** Tarifas de envío (desde tabla app_config). Público para apps móviles. */
+appRouter.get("/delivery-pricing-config", async (_req, res) => {
+  try {
+    const config = await loadDeliveryPricingConfig();
+    res.json(config);
+  } catch (e) {
+    console.error("[GET /api/app/delivery-pricing-config]", e);
+    res.status(500).json({ error: "Failed to load delivery pricing config" });
+  }
+});
+
 appRouter.get("/places", async (_req, res) => {
   try {
     const [shops, services] = await Promise.all([
       prisma.shop.findMany({
         where: { status: "ACTIVE" },
         orderBy: { name: "asc" },
-        select: { id: true, name: true, logoUrl: true, type: true, rate: true },
+        select: { id: true, name: true, logoUrl: true, type: true, rate: true, lat: true, lng: true },
       }),
       prisma.service.findMany({
         where: { isActive: true },
@@ -98,7 +110,7 @@ appRouter.get("/home", async (_req, res) => {
       prisma.shop.findMany({
         where: { status: "ACTIVE" },
         orderBy: { name: "asc" },
-        select: { id: true, name: true, logoUrl: true, type: true, rate: true },
+        select: { id: true, name: true, logoUrl: true, type: true, rate: true, lat: true, lng: true },
       }),
       prisma.service.findMany({
         where: { isActive: true },
@@ -109,7 +121,16 @@ appRouter.get("/home", async (_req, res) => {
         where: { isActive: true },
         orderBy: { createdAt: "desc" },
         take: 12,
-        select: { id: true, name: true, imageUrls: true, price: true, rate: true, hasPromotion: true, discount: true },
+        select: {
+          id: true,
+          shopId: true,
+          name: true,
+          imageUrls: true,
+          price: true,
+          rate: true,
+          hasPromotion: true,
+          discount: true,
+        },
       }),
     ]);
     const featuredPlaces = [
@@ -118,6 +139,7 @@ appRouter.get("/home", async (_req, res) => {
     ];
     const bestSellerProducts = products.map((p) => ({
       id: p.id,
+      shop_id: p.shopId,
       name: p.name,
       imageUrl: Array.isArray(p.imageUrls) && p.imageUrls.length > 0 ? p.imageUrls[0] : null,
       price: Number(p.price),
@@ -138,10 +160,21 @@ appRouter.get("/shops/:id/products", async (req, res) => {
     const products = await prisma.product.findMany({
       where: { shopId, isActive: true },
       orderBy: { name: "asc" },
-      select: { id: true, name: true, description: true, price: true, imageUrls: true, rate: true, hasPromotion: true, discount: true },
+      select: {
+        id: true,
+        shopId: true,
+        name: true,
+        description: true,
+        price: true,
+        imageUrls: true,
+        rate: true,
+        hasPromotion: true,
+        discount: true,
+      },
     });
     res.json(products.map((p) => ({
       id: p.id,
+      shop_id: p.shopId,
       name: p.name,
       description: p.description,
       price: Number(p.price),
@@ -160,11 +193,22 @@ appRouter.get("/products/:id", async (req, res) => {
   try {
     const product = await prisma.product.findFirst({
       where: { id: req.params.id, isActive: true },
-      select: { id: true, name: true, description: true, price: true, imageUrls: true, rate: true, hasPromotion: true, discount: true },
+      select: {
+        id: true,
+        shopId: true,
+        name: true,
+        description: true,
+        price: true,
+        imageUrls: true,
+        rate: true,
+        hasPromotion: true,
+        discount: true,
+      },
     });
     if (!product) return res.status(404).json({ error: "Product not found" });
     res.json({
       id: product.id,
+      shop_id: product.shopId,
       name: product.name,
       rate: product.rate,
       description: product.description ?? "",
@@ -187,6 +231,7 @@ appRouter.get("/promotions", async (_req, res) => {
       take: 20,
       select: {
         id: true,
+        shopId: true,
         name: true,
         imageUrls: true,
         price: true,
@@ -198,6 +243,7 @@ appRouter.get("/promotions", async (_req, res) => {
     res.json(
       products.map((p) => ({
         id: p.id,
+        shop_id: p.shopId,
         name: p.name,
         imageUrl: Array.isArray(p.imageUrls) && p.imageUrls.length > 0 ? p.imageUrls[0] : null,
         price: Number(p.price),

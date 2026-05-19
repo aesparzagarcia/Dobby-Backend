@@ -17,6 +17,7 @@ import { shopProductsRouter } from "./routes/shopProducts.js";
 import { deliveryOrdersRouter } from "./routes/deliveryOrders.js";
 import { analyticsRouter } from "./routes/analytics.js";
 import { uploadRouter } from "./routes/upload.js";
+import { appConfigAdminRouter } from "./routes/appConfigAdmin.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -59,6 +60,7 @@ app.use("/api/shop", shopProductsRouter);
 app.use("/api/delivery", deliveryOrdersRouter);
 app.use("/api/analytics", analyticsRouter);
 app.use("/api/upload", uploadRouter);
+app.use("/api/admin/app-config", appConfigAdminRouter);
 
 const HOST = process.env.HOST ?? "0.0.0.0";
 app.listen(PORT, HOST, () => {
